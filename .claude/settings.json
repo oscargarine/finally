@@ -1,5 +1,14 @@
 {
-  "enabledPlugins": {
-    "playwright@claude-plugins-official": true
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "claude exec \"Revisa los cambios desde el último commit y escribe los resultados en un archivo planning_review.md\""
+          }
+        ]
+      }
+    ]
   }
 }

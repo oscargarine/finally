@@ -367,7 +367,7 @@ class MarketSimulator(MarketDataProvider):
 import os
 
 MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY", "")
-MASSIVE_BASE_URL = "https://api.massive.io/v2"  # placeholder; usar el endpoint real de Massive/Polygon
+MASSIVE_BASE_URL = "https://api.massive.com"  # confirmado en planning/massive_api.md; rutas bajo /v2/...
 MASSIVE_POLL_INTERVAL_SECONDS = float(os.environ.get("MASSIVE_POLL_INTERVAL_SECONDS", "15"))
 ```
 
@@ -502,8 +502,10 @@ async def lifespan(app: FastAPI):
     provider = build_market_data_provider(on_tick)
     app.state.market_data_provider = provider
 
-    # sembrar tickers iniciales desde la watchlist persistida
-    for ticker in load_watchlist_tickers():
+    # sembrar tickers iniciales: unión de watchlist + tickers con posición abierta
+    # (una posición sin ticker en watchlist debe seguir recibiendo precios tras un reinicio)
+    seed_tickers = set(load_watchlist_tickers()) | set(load_position_tickers())
+    for ticker in seed_tickers:
         provider.add_ticker(ticker)
 
     await provider.start()
