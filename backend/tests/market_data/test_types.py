@@ -24,7 +24,7 @@ def test_create_sets_iso_utc_timestamp():
 
 
 def test_to_sse_dict_shape():
-    tick = PriceTick.create("AAPL", 191.0, 190.0)
+    tick = PriceTick.create("AAPL", 191.0, 190.0, session_open=188.0)
     payload = tick.to_sse_dict()
     assert payload == {
         "ticker": "AAPL",
@@ -32,4 +32,15 @@ def test_to_sse_dict_shape():
         "prev_price": 190.0,
         "timestamp": tick.timestamp,
         "direction": "up",
+        "session_open": 188.0,
     }
+
+
+def test_create_defaults_session_open_to_price_when_not_given():
+    tick = PriceTick.create("AAPL", 191.0, 190.0)
+    assert tick.session_open == 191.0
+
+
+def test_create_rounds_session_open():
+    tick = PriceTick.create("AAPL", 191.0, 190.0, session_open=188.123456)
+    assert tick.session_open == 188.1235

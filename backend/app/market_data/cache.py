@@ -9,6 +9,7 @@ class CachedPrice:
     price: float
     prev_price: float
     timestamp: str
+    session_open: float
 
 
 class PriceCache:
@@ -29,6 +30,7 @@ class PriceCache:
                 price=tick.price,
                 prev_price=tick.prev_price,
                 timestamp=tick.timestamp,
+                session_open=tick.session_open,
             )
             dead: list[asyncio.Queue] = []
             for q in self._subscribers:
@@ -40,7 +42,10 @@ class PriceCache:
                 self._subscribers.discard(q)
 
     def snapshot(self) -> dict[str, CachedPrice]:
-        return {k: CachedPrice(v.price, v.prev_price, v.timestamp) for k, v in self._latest.items()}
+        return {
+            k: CachedPrice(v.price, v.prev_price, v.timestamp, v.session_open)
+            for k, v in self._latest.items()
+        }
 
     def get(self, ticker: str) -> CachedPrice | None:
         return self._latest.get(ticker)

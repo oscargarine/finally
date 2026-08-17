@@ -1,6 +1,8 @@
 # Diseño del Backend de Datos de Mercado
 
 > Documento de diseño técnico para la implementación del componente de datos de mercado descrito en `PLAN.md` (Sección 6). Dirigido al agente de Backend/Datos de Mercado. Incluye fragmentos de código en Python (FastAPI, async) listos para adaptar.
+>
+> **Aviso (2026-08-14): documento histórico, no fuente de verdad.** El componente ya está implementado en `backend/app/market_data/` y ha evolucionado más allá de los fragmentos de código de este documento — por ejemplo, `PriceTick`/`CachedPrice` ahora incluyen `session_open`, `MarketDataProvider` expone `get_last_price()`, `MarketSimulator.add_ticker()` emite un tick inmediato, y `PriceCache.snapshot()` hace copia profunda de cada `CachedPrice` (no `dict(self._latest)`) — ver `PLAN.md` §6 para el contrato vigente. Ante cualquier discrepancia entre este documento y `PLAN.md` o el código real bajo `backend/app/market_data/`, esos dos priman. Este documento se conserva como contexto de diseño original, no como referencia a mantener sincronizada línea a línea.
 
 ## 1. Objetivos y Restricciones
 

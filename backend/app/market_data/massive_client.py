@@ -38,6 +38,8 @@ class MassiveMarketDataProvider(MarketDataProvider):
         super().__init__(on_tick)
         self._poll_interval_seconds = poll_interval_seconds
         self._prev_prices: dict[str, float] = {}
+        # capturado una vez por ticker (prevDay.c) y fijo mientras dure el proceso (§6 "session_open")
+        self._session_open: dict[str, float] = {}
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -47,10 +49,26 @@ class MassiveMarketDataProvider(MarketDataProvider):
         self._running = False
 
     def add_ticker(self, ticker: str) -> None:
-        self._tickers.add(ticker.upper())
+        ticker = ticker.upper()
+        is_new = ticker not in self._tickers
+        self._tickers.add(ticker)
+        if is_new and self._running:
+            # sondeo dedicado inmediato: evita que ensure_ticker() tenga que esperar
+            # hasta el siguiente ciclo periódico completo (hasta MASSIVE_POLL_INTERVAL_SECONDS)
+            # para obtener el primer precio (ver planning/PLAN.md §6)
+            asyncio.create_task(self._poll_new_ticker_immediately(ticker))
 
     def remove_ticker(self, ticker: str) -> None:
         self._tickers.discard(ticker.upper())
+
+    def get_last_price(self, ticker: str) -> float | None:
+        return self._prev_prices.get(ticker.upper())
+
+    async def _poll_new_ticker_immediately(self, ticker: str) -> None:
+        try:
+            await self._poll_tickers({ticker})
+        except httpx.HTTPError as exc:
+            logger.warning("Massive dedicated poll for new ticker %s failed: %s", ticker, exc)
 
     async def start(self) -> None:
         self._running = True
@@ -82,28 +100,37 @@ class MassiveMarketDataProvider(MarketDataProvider):
         Público (no solo invocado desde el bucle privado) para que los tests
         puedan ejercitar el parseo y la emisión sin depender de temporizadores.
         """
-        tickers_param = ",".join(sorted(self._tickers))
+        return await self._poll_tickers(self._tickers)
+
+    async def _poll_tickers(self, tickers: set[str]) -> list[PriceTick]:
+        tickers_param = ",".join(sorted(tickers))
         resp = await self._client.get(SNAPSHOT_PATH, params={"tickers": tickers_param})
         resp.raise_for_status()
         payload = resp.json()
 
         ticks: list[PriceTick] = []
-        for ticker, price in self._parse_response(payload):
+        for ticker, price, session_open in self._parse_response(payload):
             prev = self._prev_prices.get(ticker, price)
-            tick = PriceTick.create(ticker, price, prev)
+            # se fija la primera vez que se ve el ticker y queda fijo después
+            resolved_session_open = self._session_open.setdefault(
+                ticker, session_open if session_open is not None else price
+            )
+            tick = PriceTick.create(ticker, price, prev, session_open=resolved_session_open)
             self._prev_prices[ticker] = price
             ticks.append(tick)
             await self._emit(tick)
         return ticks
 
     @staticmethod
-    def _parse_response(payload: dict) -> list[tuple[str, float]]:
-        """Adapta la forma de la respuesta de snapshot de Massive a (ticker, price).
+    def _parse_response(payload: dict) -> list[tuple[str, float, float | None]]:
+        """Adapta la respuesta de snapshot de Massive a (ticker, price, session_open).
 
-        Prioriza el último trade, y recurre al cierre del día / cierre anterior
-        si el último trade no está disponible (mercado cerrado, plan con retraso).
+        El precio prioriza el último trade, y recurre al cierre del día / cierre
+        anterior si el último trade no está disponible (mercado cerrado, plan con
+        retraso). `session_open` es siempre `prevDay.c` (cierre del día anterior),
+        independientemente de qué campo se haya usado como precio (§6).
         """
-        results: list[tuple[str, float]] = []
+        results: list[tuple[str, float, float | None]] = []
         for item in payload.get("tickers", []):
             ticker = item.get("ticker")
             if not ticker:
@@ -113,6 +140,9 @@ class MassiveMarketDataProvider(MarketDataProvider):
                 or item.get("day", {}).get("c")
                 or item.get("prevDay", {}).get("c")
             )
-            if price is not None:
-                results.append((ticker, float(price)))
+            if price is None:
+                continue
+            prev_close = item.get("prevDay", {}).get("c")
+            session_open = float(prev_close) if prev_close is not None else None
+            results.append((ticker, float(price), session_open))
         return results

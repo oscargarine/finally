@@ -32,6 +32,8 @@ class MarketSimulator(MarketDataProvider):
         self._drift: dict[str, float] = {t: cfg.drift for t, cfg in DEFAULT_TICKERS.items()}
         self._volatility: dict[str, float] = {t: cfg.volatility for t, cfg in DEFAULT_TICKERS.items()}
         self._sector: dict[str, str] = {t: cfg.sector for t, cfg in DEFAULT_TICKERS.items()}
+        # capturado una vez por ticker y fijo durante toda la vida del proceso (§6 "session_open")
+        self._session_open: dict[str, float] = dict(self._prices)
         self._tickers = set(DEFAULT_TICKERS.keys())
         self._task: asyncio.Task | None = None
         self._running = False
@@ -50,13 +52,37 @@ class MarketSimulator(MarketDataProvider):
                 self._drift[ticker] = GENERIC_TICKER_DRIFT
                 self._volatility[ticker] = GENERIC_TICKER_VOLATILITY
                 self._sector[ticker] = GENERIC_TICKER_SECTOR
+        self._session_open.setdefault(ticker, self._prices[ticker])
+        was_tracked = ticker in self._tickers
         self._tickers.add(ticker)
+        if not was_tracked:
+            self._emit_immediate_tick(ticker)
 
     def remove_ticker(self, ticker: str) -> None:
         self._tickers.discard(ticker.upper())
 
-    def current_price(self, ticker: str) -> float | None:
+    def get_last_price(self, ticker: str) -> float | None:
         return self._prices.get(ticker.upper())
+
+    def current_price(self, ticker: str) -> float | None:
+        return self.get_last_price(ticker)
+
+    def _emit_immediate_tick(self, ticker: str) -> None:
+        """Emite un tick con el precio recién asignado sin esperar al próximo ciclo (§6).
+
+        `add_ticker` es síncrono por contrato de interfaz, así que la emisión (que
+        necesita `await`) se programa como tarea de fondo. Si todavía no hay un
+        event loop corriendo (p.ej. se llama antes de `start()`), se omite en
+        silencio: el primer `tick_once()` del bucle normal ya cubrirá ese ticker.
+        """
+        price = self._prices[ticker]
+        session_open = self._session_open[ticker]
+        tick = PriceTick.create(ticker, price, price, session_open=session_open)
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        asyncio.create_task(self._emit(tick))
 
     def _lognormal_seed_price(self) -> float:
         low, high = GENERIC_SEED_PRICE_RANGE
@@ -112,7 +138,7 @@ class MarketSimulator(MarketDataProvider):
             new_price = max(new_price, 0.01)
             self._prices[ticker] = new_price
 
-            tick = PriceTick.create(ticker, new_price, prev)
+            tick = PriceTick.create(ticker, new_price, prev, session_open=self._session_open[ticker])
             ticks.append(tick)
             await self._emit(tick)
 

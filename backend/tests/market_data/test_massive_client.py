@@ -149,6 +149,94 @@ async def test_run_loop_swallows_http_errors_and_keeps_polling():
     assert call_count >= 2
 
 
+def test_get_last_price_returns_none_before_first_poll():
+    provider, _ = make_provider(lambda request: httpx.Response(200, json=snapshot_payload({})))
+    provider.add_ticker("AAPL")
+    assert provider.get_last_price("AAPL") is None
+
+
+async def test_get_last_price_returns_last_polled_price():
+    payload = snapshot_payload({"AAPL": {"lastTrade": {"p": 189.72}}})
+    provider, _ = make_provider(lambda request: httpx.Response(200, json=payload))
+    provider.add_ticker("AAPL")
+
+    await provider.poll_once()
+
+    assert provider.get_last_price("AAPL") == 189.72
+
+
+async def test_poll_once_captures_session_open_from_prev_day_close():
+    payload = snapshot_payload({"AAPL": {"lastTrade": {"p": 189.72}, "prevDay": {"c": 187.9}}})
+    provider, _ = make_provider(lambda request: httpx.Response(200, json=payload))
+    provider.add_ticker("AAPL")
+
+    ticks = await provider.poll_once()
+
+    assert ticks[0].session_open == 187.9
+
+
+async def test_session_open_stays_fixed_once_captured():
+    prices = iter([189.72, 195.0])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=snapshot_payload(
+                {"AAPL": {"lastTrade": {"p": next(prices)}, "prevDay": {"c": 187.9}}}
+            ),
+        )
+
+    provider, _ = make_provider(handler)
+    provider.add_ticker("AAPL")
+
+    first = await provider.poll_once()
+    second = await provider.poll_once()
+
+    assert first[0].session_open == 187.9
+    assert second[0].session_open == 187.9
+
+
+async def test_add_ticker_while_running_triggers_immediate_dedicated_poll():
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=snapshot_payload({"AAPL": {"lastTrade": {"p": 189.72}}}))
+
+    provider, received = make_provider(handler)
+    provider._poll_interval_seconds = 100  # el ciclo normal no debe disparar en este test
+
+    await provider.start()
+    try:
+        provider.add_ticker("AAPL")
+        # da tiempo a que corra la tarea de fondo creada por add_ticker()
+        for _ in range(50):
+            if provider.get_last_price("AAPL") is not None:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await provider.stop()
+
+    assert provider.get_last_price("AAPL") == 189.72
+    assert any(t.ticker == "AAPL" for t in received)
+    # sondeo dedicado con un único ticker, no el ciclo periódico completo
+    assert any(req.url.params["tickers"] == "AAPL" for req in captured)
+
+
+async def test_add_ticker_while_not_running_does_not_poll_immediately():
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=snapshot_payload({}))
+
+    provider, _ = make_provider(handler)
+    provider.add_ticker("AAPL")
+    await asyncio.sleep(0)
+
+    assert captured == []
+
+
 async def test_stop_closes_the_http_client():
     provider, _ = make_provider(lambda request: httpx.Response(200, json=snapshot_payload({})))
     await provider.start()

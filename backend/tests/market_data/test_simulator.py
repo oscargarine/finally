@@ -113,6 +113,52 @@ def test_same_seed_produces_identical_first_tick():
     assert prices_a == prices_b
 
 
+def test_get_last_price_returns_none_for_unknown_ticker():
+    sim, _ = make_simulator()
+    assert sim.get_last_price("UNKNOWN") is None
+
+
+def test_get_last_price_matches_current_price():
+    sim, _ = make_simulator()
+    assert sim.get_last_price("AAPL") == DEFAULT_TICKERS["AAPL"].seed_price
+
+
+async def test_add_ticker_emits_immediately_without_waiting_for_next_tick():
+    sim, received = make_simulator()
+
+    sim.add_ticker("PYPL")
+    await asyncio.sleep(0)  # deja correr la tarea de emisión inmediata programada
+
+    assert any(t.ticker == "PYPL" for t in received)
+
+
+async def test_add_ticker_immediate_tick_has_flat_direction_and_matching_session_open():
+    sim, received = make_simulator()
+
+    sim.add_ticker("PYPL")
+    await asyncio.sleep(0)
+
+    tick = next(t for t in received if t.ticker == "PYPL")
+    assert tick.direction.value == "flat"
+    assert tick.session_open == tick.price == round(sim.get_last_price("PYPL"), 4)
+
+
+def test_add_ticker_outside_event_loop_does_not_raise():
+    sim, _ = make_simulator()
+    sim.add_ticker("PYPL")  # llamado de forma síncrona, sin loop corriendo
+    assert "PYPL" in sim.tickers
+
+
+def test_session_open_stays_fixed_across_ticks():
+    sim, _ = make_simulator(seed=7)
+    initial = sim.get_last_price("AAPL")
+
+    for _ in range(10):
+        asyncio.run(sim.tick_once())
+
+    assert sim._session_open["AAPL"] == initial
+
+
 async def test_start_and_stop_runs_background_loop():
     sim, received = make_simulator()
     await sim.start()

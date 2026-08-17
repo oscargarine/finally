@@ -22,6 +22,9 @@ class DummyProvider(MarketDataProvider):
     def remove_ticker(self, ticker: str) -> None:
         self._tickers.discard(ticker)
 
+    def get_last_price(self, ticker: str) -> float | None:
+        return None
+
 
 async def test_emit_invokes_on_tick_callback():
     received = []

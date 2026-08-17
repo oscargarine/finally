@@ -38,6 +38,16 @@ class MarketDataProvider(ABC):
         """Elimina un ticker del conjunto vigilado."""
         ...
 
+    @abstractmethod
+    def get_last_price(self, ticker: str) -> float | None:
+        """Último precio conocido de `ticker`, o `None` si aún no hay ninguno.
+
+        Síncrono y de lectura inmediata (sin esperar al próximo ciclo del bucle
+        en segundo plano) — lo usa `ensure_ticker` en el backend para saber si ya
+        puede responder tras un `add_ticker` (ver planning/PLAN.md §6).
+        """
+        ...
+
     @property
     def tickers(self) -> frozenset[str]:
         return frozenset(self._tickers)

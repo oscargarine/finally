@@ -111,7 +111,7 @@ finally/
 
 - **`frontend/`** es un proyecto Next.js autocontenido. No sabe nada de Python. Se comunica con el backend a través de los endpoints `/api/*` y los endpoints SSE `/api/stream/*`. La estructura interna queda a criterio del agente Ingeniero de Frontend.
 - **`backend/`** es un proyecto uv autocontenido con su propio `pyproject.toml`. Es responsable de toda la lógica del servidor, incluyendo la inicialización de la base de datos, el esquema, los datos semilla, las rutas de la API, el streaming SSE, los datos de mercado y la integración con el LLM. La estructura interna queda a criterio de los agentes de Backend/Datos de Mercado.
-- **`backend/db/`** contiene las definiciones SQL del esquema y la lógica de datos semilla. El backend inicializa la base de datos de forma diferida (lazy) en la primera solicitud — creando las tablas y poblando los datos predeterminados si el archivo SQLite no existe o está vacío.
+- **`backend/db/`** contiene las definiciones SQL del esquema y la lógica de datos semilla. El backend inicializa la base de datos de forma diferida (lazy) — no hay paso de migración independiente ni configuración manual — pero la inicialización ocurre una única vez dentro del `lifespan` de FastAPI, antes de aceptar tráfico (no "en la primera solicitud"; ver §7 para el porqué). Crea las tablas y puebla los datos predeterminados si el archivo SQLite no existe o está vacío.
 - **`db/`** en el nivel superior es el punto de montaje del volumen en tiempo de ejecución. El archivo SQLite (`db/finally.db`) es creado aquí por el backend y persiste entre reinicios del contenedor gracias al volumen Docker.
 - **`planning/`** contiene la documentación de todo el proyecto, incluido este plan. Todos los agentes usan los archivos de aquí como contrato compartido.
 - **`test/`** contiene los tests E2E con Playwright e infraestructura de soporte (por ejemplo, `docker-compose.test.yml`). Los tests unitarios viven dentro de `frontend/` y `backend/` respectivamente, siguiendo las convenciones de cada framework.
@@ -194,7 +194,7 @@ Tanto el simulador como el cliente de Massive implementan la misma interfaz abst
 La interfaz abstracta `MarketDataProvider` (además de `start`, `stop`, `add_ticker`, `remove_ticker`, `tickers`) debe exponer un método síncrono `get_last_price(ticker: str) -> float | None` para poder comprobar de forma inmediata si ya existe un precio utilizable para un ticker, sin esperar al próximo ciclo del bucle en segundo plano:
 
 - **Simulador**: `add_ticker()` debe escribir inmediatamente en la caché de precios (emitir un tick con el precio semilla recién asignado) en el mismo momento en que se registra el ticker, en vez de esperar al siguiente ciclo de ~500ms.
-- **Massive**: un ticker recién añadido puede tardar hasta el intervalo de sondeo completo (hasta 15s+ en el nivel gratuito) en tener un primer precio — o no tenerlo nunca, si el símbolo no existe realmente en el mercado. La operación que registra un ticker nuevo (ver `ensure_ticker` abajo) debe aplicar un timeout explícito (8 segundos) esperando ese primer precio; si expira sin resultado, la petición que lo originó falla con `503` (ver §8), no se bloquea indefinidamente ni se acepta silenciosamente sin precio.
+- **Massive**: si `add_ticker()` esperase al próximo ciclo periódico normal, un ticker nuevo podría tardar hasta el intervalo de sondeo completo (15s+ en el nivel gratuito) en tener un primer precio, lo que haría fallar sistemáticamente cualquier timeout corto en `ensure_ticker`. Para evitarlo, `MassiveMarketDataProvider.add_ticker()` dispara, además de registrar el ticker en el conjunto vigilado, un sondeo dedicado inmediato (fuera del ciclo periódico, como una tarea en segundo plano) que consulta solo ese ticker y escribe su primer precio (y `session_open`) en cuanto la API responde. Gracias a esto, la operación que registra un ticker nuevo (ver `ensure_ticker` abajo) solo necesita cubrir la latencia de esa llamada de red puntual — no el intervalo de sondeo completo — por lo que un timeout explícito de 8 segundos es realista. Si expira sin resultado (símbolo inexistente, API caída), la petición que lo originó falla con `503` (ver §8), no se bloquea indefinidamente ni se acepta silenciosamente sin precio.
 
 **`ensure_ticker(ticker)`** es la operación de dominio (a implementar en el backend, no en el proveedor) que usan tanto `POST /api/watchlist` como `POST /api/portfolio/trade` antes de responder: registra el ticker en el proveedor si aún no lo conoce (`add_ticker`), espera (con el timeout anterior) a que `get_last_price` devuelva un valor, y solo entonces continúa. El proveedor debe mantener en todo momento como conjunto vigilado `watchlist ∪ position_tickers`; cuando un ticker se elimina de la watchlist y no tiene una posición abierta, el backend llama a `provider.remove_ticker(ticker)` para que deje de simularse/sondearse sin necesidad.
 
@@ -230,7 +230,7 @@ La base de datos se abre con `PRAGMA journal_mode=WAL` (permite lectores concurr
 
 Todas las tablas incluyen una columna `user_id` con valor predeterminado `"default"`. Esto está fijado por ahora (usuario único) pero permite un futuro soporte multiusuario sin migración de esquema.
 
-**Precisión monetaria**: `cash_balance`, `avg_cost`, `price` y `total_value` se mantienen como `REAL` (se descarta introducir `Decimal`/enteros de escala fija — no justificado por la simplicidad didáctica del proyecto, igual criterio que llevó a elegir SQLite sobre Postgres, §3). Para evitar que los errores de redondeo binario produzcan validaciones o totales inconsistentes entre la cabecera, la tabla de posiciones y los snapshots: todo valor monetario se redondea a 2 decimales en el momento de escribirse (misma idea que el redondeo a 4 decimales ya fijado para `quantity`), y toda comparación con cero (p. ej. detectar cash insuficiente) usa una tolerancia de `1e-6`, igual que la ya definida para el cierre de posiciones.
+**Precisión monetaria**: `cash_balance`, `avg_cost`, `price` y `total_value` se mantienen como `REAL` (se descarta introducir `Decimal`/enteros de escala fija — no justificado por la simplicidad didáctica del proyecto, igual criterio que llevó a elegir SQLite sobre Postgres, §3). Para evitar que los errores de redondeo binario produzcan validaciones o totales inconsistentes entre la cabecera, la tabla de posiciones y los snapshots: todo valor monetario se redondea a 2 decimales en el momento de escribirse (misma idea que el redondeo a 4 decimales ya fijado para `quantity`), y toda comparación con cero (p. ej. detectar cash insuficiente) usa una tolerancia de `1e-6`, igual que la ya definida para el cierre de posiciones. Esto incluye explícitamente el precio de ejecución que se persiste en `trades.price` y que alimenta el cálculo de `avg_cost`: aunque el proveedor de datos de mercado emite precios con 4 decimales (`PriceTick.price`, §6), el precio leído de la caché en el momento de ejecutar una operación se redondea a 2 decimales *antes* de usarse tanto para actualizar `cash_balance`/`avg_cost` como para la fila insertada en `trades` — una única regla de redondeo para todo el pipeline de una operación, no dos valores distintos (uno de 4 decimales para mostrar el precio en vivo, otro de 2 para la cartera).
 
 **users_profile** — Estado del usuario (saldo de efectivo)
 - `id` TEXT PRIMARY KEY (predeterminado: `"default"`)
@@ -337,10 +337,28 @@ Todos los endpoints de escritura (`POST`/`DELETE`) usan estos códigos de forma 
 |---|---|---|
 | `400` | Payload o formato inválido | Ticker que no cumple `^[A-Z]{1,5}$`, `quantity <= 0`, mensaje de chat > 4000 caracteres |
 | `404` | Recurso no encontrado | `DELETE /api/watchlist/{ticker}` para un ticker que no está en la watchlist |
-| `409` / `422` | La operación es válida en forma pero no se puede ejecutar (regla de negocio) | Efectivo insuficiente para comprar, acciones insuficientes para vender |
+| `409` | La operación es válida en forma pero no se puede ejecutar (regla de negocio) | Efectivo insuficiente para comprar, acciones insuficientes para vender |
 | `503` | No hay un precio actual utilizable para el ticker | Ticker recién añadido en modo Massive sin precio tras el timeout de `ensure_ticker` (§6), o símbolo sin datos reales |
 
 El cuerpo de error sigue siempre la forma `{"error": "mensaje legible", "code": "SNAKE_CASE_CODE"}`.
+
+### Cuerpos de Éxito (esquema mínimo)
+
+| Ruta | `200`/`201` body |
+|---|---|
+| `GET /api/portfolio` | `{cash_balance, total_value, positions: [{ticker, quantity, avg_cost, current_price, unrealized_pnl, unrealized_pnl_pct}]}` |
+| `POST /api/portfolio/trade` | `{ticker, side, quantity, price, cash_balance, position: {quantity, avg_cost} \| null}` (`position: null` si la venta cerró la posición) |
+| `GET /api/portfolio/history` | `{snapshots: [{total_value, recorded_at}]}` |
+| `GET /api/watchlist` | `{tickers: [{ticker, price, prev_price, session_open, added_at}]}` |
+| `POST /api/watchlist` | `{ticker, added_at}` |
+| `DELETE /api/watchlist/{ticker}` | `204` sin cuerpo |
+| `POST /api/chat` | `{message, trades: [...], watchlist_changes: [...]}` — mismo esquema que `chat_messages.actions` (§7) |
+| `GET /api/chat/messages` | `{messages: [{id, role, content, actions, created_at}]}` |
+| `GET /api/health` | `{status: "ok"}` (o `503` con `{status: "unhealthy", ...}`, ver §11) |
+
+### Límite de acciones del LLM por respuesta
+
+Para que una única respuesta del LLM estructuralmente válida no pueda monopolizar el lock de escritura de SQLite (§7) ejecutando decenas de operaciones en cadena, `trades` y `watchlist_changes` (§9) se limitan cada uno a **10 elementos por respuesta**. Este límite se declara en el modelo Pydantic del `response_format` (p. ej. `Field(max_length=10)`), no solo en el prompt — igual criterio que las restricciones `Literal`/`> 0` ya fijadas en §9. Si el LLM devuelve más, la respuesta no cumple el esquema y se trata como fallo de parseo (§9, "Contrato de Fallos del LLM").
 
 ---
 
@@ -420,11 +438,15 @@ Cuando `LLM_MOCK=true`, el backend devuelve respuestas simuladas deterministas e
 - Desarrollo sin una clave de API
 - Pipelines de CI/CD
 
-**Regla de mapeo mensaje→respuesta** (necesaria para que los tests E2E de §12 sean escribibles): el mock inspecciona el mensaje del usuario por palabras clave, sin distinguir mayúsculas/minúsculas:
-- Contiene "compra"/"buy" + un ticker reconocible (patrón `[A-Z]{1,5}` en el texto) → responde con `trades: [{"ticker": <detectado>, "side": "buy", "quantity": 1}]`
-- Contiene "vende"/"sell" + un ticker → análogo con `"side": "sell"`
-- Contiene "añade"/"add" + un ticker → `watchlist_changes: [{"ticker": <detectado>, "action": "add"}]`
-- Cualquier otro mensaje → respuesta puramente conversacional (`message` fijo o basado en eco del contexto de cartera cargado en el paso 1 de §9), sin `trades` ni `watchlist_changes`
+**Regla de mapeo mensaje→respuesta** (necesaria para que los tests E2E de §12 sean escribibles): el mock primero normaliza todo el mensaje a mayúsculas, y luego aplica, en este orden, la primera expresión regular que coincida (evita que la propia palabra clave — p. ej. `BUY` — se confunda con el ticker capturado en `[A-Z]{1,5}`, que sí podría matchear la palabra clave si no se la excluye explícitamente de la búsqueda del ticker):
+
+1. `\b(?:BUY|COMPRA)\b.*?\b(?!BUY\b|COMPRA\b|SELL\b|VENDE\b|ADD\b|AÑADE\b)([A-Z]{1,5})\b` → `trades: [{"ticker": <grupo 1>, "side": "buy", "quantity": 1}]`
+2. `\b(?:SELL|VENDE)\b.*?\b(?!BUY\b|COMPRA\b|SELL\b|VENDE\b|ADD\b|AÑADE\b)([A-Z]{1,5})\b` → `trades: [{"ticker": <grupo 1>, "side": "sell", "quantity": 1}]`
+3. `\b(?:ADD|AÑADE)\b.*?\b(?!BUY\b|COMPRA\b|SELL\b|VENDE\b|ADD\b|AÑADE\b)([A-Z]{1,5})\b` → `watchlist_changes: [{"ticker": <grupo 1>, "action": "add"}]`
+4. Si la palabra clave (`BUY`/`COMPRA`/`SELL`/`VENDE`/`ADD`/`AÑADE`) está presente pero ninguna de las reglas anteriores captura un ticker (p. ej. `"compra algo"`, sin símbolo reconocible) → respuesta puramente conversacional, igual que el caso 5; no se inventa un ticker
+5. Cualquier otro mensaje → respuesta puramente conversacional (`message` fijo o basado en eco del contexto de cartera cargado en el paso 1 de §9), sin `trades` ni `watchlist_changes`
+
+Esta gramática cubre de forma determinista tanto comandos (`"BUY AAPL"`, `"compra 5 TSLA"`) como frases naturales (`"quiero comprar NVDA"`), y el caso sin ticker. Los tests unitarios del mock (backend) deben incluir casos para cada regla, incluyendo un mensaje con palabra clave pero sin ticker.
 
 ---
 
