@@ -32,7 +32,7 @@ class PriceCache:
                 timestamp=tick.timestamp,
                 session_open=tick.session_open,
             )
-            dead: list[asyncio.Queue] = []
+            dead: list[asyncio.Queue[PriceTick]] = []
             for q in self._subscribers:
                 try:
                     q.put_nowait(tick)

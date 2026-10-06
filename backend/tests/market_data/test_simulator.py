@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from app.market_data.base import MarketDataProvider
 from app.market_data.simulator import MarketSimulator
 from app.market_data.simulator_config import DEFAULT_TICKERS, GENERIC_SEED_PRICE_RANGE
@@ -17,16 +15,16 @@ def make_simulator(seed: int = 42) -> tuple[MarketSimulator, list[PriceTick]]:
     return MarketSimulator(on_tick, seed=seed), received
 
 
-def test_implements_market_data_provider_interface():
+def test_implements_market_data_provider_interface() -> None:
     assert issubclass(MarketSimulator, MarketDataProvider)
 
 
-def test_starts_with_default_tickers():
+def test_starts_with_default_tickers() -> None:
     sim, _ = make_simulator()
     assert sim.tickers == frozenset(DEFAULT_TICKERS.keys())
 
 
-async def test_tick_once_emits_positive_prices_for_all_tickers():
+async def test_tick_once_emits_positive_prices_for_all_tickers() -> None:
     sim, received = make_simulator()
     ticks = await sim.tick_once()
 
@@ -35,7 +33,7 @@ async def test_tick_once_emits_positive_prices_for_all_tickers():
     assert all(t.price > 0 for t in ticks)
 
 
-async def test_tick_once_moves_prices_away_from_seed():
+async def test_tick_once_moves_prices_away_from_seed() -> None:
     sim, _ = make_simulator()
     seed_prices = {t: cfg.seed_price for t, cfg in DEFAULT_TICKERS.items()}
 
@@ -45,7 +43,7 @@ async def test_tick_once_moves_prices_away_from_seed():
     assert any(sim.current_price(t) != seed_prices[t] for t in DEFAULT_TICKERS)
 
 
-def test_add_known_ticker_uses_its_seed_price():
+def test_add_known_ticker_uses_its_seed_price() -> None:
     sim, _ = make_simulator()
     sim.remove_ticker("NVDA")
     assert "NVDA" not in sim.tickers
@@ -55,16 +53,18 @@ def test_add_known_ticker_uses_its_seed_price():
     assert sim.current_price("NVDA") == DEFAULT_TICKERS["NVDA"].seed_price
 
 
-def test_add_unknown_ticker_gets_a_plausible_seed_price():
+def test_add_unknown_ticker_gets_a_plausible_seed_price() -> None:
     sim, _ = make_simulator()
     sim.add_ticker("PYPL")
 
     assert "PYPL" in sim.tickers
     low, high = GENERIC_SEED_PRICE_RANGE
-    assert low <= sim.current_price("PYPL") <= high
+    price = sim.current_price("PYPL")
+    assert price is not None
+    assert low <= price <= high
 
 
-async def test_unknown_ticker_participates_in_ticks():
+async def test_unknown_ticker_participates_in_ticks() -> None:
     sim, received = make_simulator()
     sim.add_ticker("PYPL")
 
@@ -73,7 +73,7 @@ async def test_unknown_ticker_participates_in_ticks():
     assert any(t.ticker == "PYPL" for t in received)
 
 
-def test_readding_a_previously_seen_generic_ticker_preserves_its_price():
+def test_readding_a_previously_seen_generic_ticker_preserves_its_price() -> None:
     sim, _ = make_simulator()
     sim.add_ticker("PYPL")
     price_after_first_add = sim.current_price("PYPL")
@@ -86,13 +86,13 @@ def test_readding_a_previously_seen_generic_ticker_preserves_its_price():
     assert sim.current_price("PYPL") == price_after_first_add
 
 
-def test_remove_ticker_excludes_it_from_future_ticks():
+def test_remove_ticker_excludes_it_from_future_ticks() -> None:
     sim, _ = make_simulator()
     sim.remove_ticker("AAPL")
     assert "AAPL" not in sim.tickers
 
 
-async def test_removed_ticker_no_longer_emits():
+async def test_removed_ticker_no_longer_emits() -> None:
     sim, received = make_simulator()
     sim.remove_ticker("AAPL")
 
@@ -101,7 +101,7 @@ async def test_removed_ticker_no_longer_emits():
     assert all(t.ticker != "AAPL" for t in received)
 
 
-def test_same_seed_produces_identical_first_tick():
+def test_same_seed_produces_identical_first_tick() -> None:
     sim_a, received_a = make_simulator(seed=123)
     sim_b, received_b = make_simulator(seed=123)
 
@@ -113,17 +113,17 @@ def test_same_seed_produces_identical_first_tick():
     assert prices_a == prices_b
 
 
-def test_get_last_price_returns_none_for_unknown_ticker():
+def test_get_last_price_returns_none_for_unknown_ticker() -> None:
     sim, _ = make_simulator()
     assert sim.get_last_price("UNKNOWN") is None
 
 
-def test_get_last_price_matches_current_price():
+def test_get_last_price_matches_current_price() -> None:
     sim, _ = make_simulator()
     assert sim.get_last_price("AAPL") == DEFAULT_TICKERS["AAPL"].seed_price
 
 
-async def test_add_ticker_emits_immediately_without_waiting_for_next_tick():
+async def test_add_ticker_emits_immediately_without_waiting_for_next_tick() -> None:
     sim, received = make_simulator()
 
     sim.add_ticker("PYPL")
@@ -132,7 +132,7 @@ async def test_add_ticker_emits_immediately_without_waiting_for_next_tick():
     assert any(t.ticker == "PYPL" for t in received)
 
 
-async def test_add_ticker_immediate_tick_has_flat_direction_and_matching_session_open():
+async def test_add_ticker_immediate_tick_has_flat_direction_and_matching_session_open() -> None:
     sim, received = make_simulator()
 
     sim.add_ticker("PYPL")
@@ -140,16 +140,18 @@ async def test_add_ticker_immediate_tick_has_flat_direction_and_matching_session
 
     tick = next(t for t in received if t.ticker == "PYPL")
     assert tick.direction.value == "flat"
-    assert tick.session_open == tick.price == round(sim.get_last_price("PYPL"), 4)
+    last = sim.get_last_price("PYPL")
+    assert last is not None
+    assert tick.session_open == tick.price == round(last, 4)
 
 
-def test_add_ticker_outside_event_loop_does_not_raise():
+def test_add_ticker_outside_event_loop_does_not_raise() -> None:
     sim, _ = make_simulator()
     sim.add_ticker("PYPL")  # llamado de forma síncrona, sin loop corriendo
     assert "PYPL" in sim.tickers
 
 
-def test_session_open_stays_fixed_across_ticks():
+def test_session_open_stays_fixed_across_ticks() -> None:
     sim, _ = make_simulator(seed=7)
     initial = sim.get_last_price("AAPL")
 
@@ -159,7 +161,7 @@ def test_session_open_stays_fixed_across_ticks():
     assert sim._session_open["AAPL"] == initial
 
 
-async def test_start_and_stop_runs_background_loop():
+async def test_start_and_stop_runs_background_loop() -> None:
     sim, received = make_simulator()
     await sim.start()
     try:
@@ -171,6 +173,6 @@ async def test_start_and_stop_runs_background_loop():
     assert all(t.price > 0 for t in received)
 
 
-async def test_stop_is_safe_to_call_when_never_started():
+async def test_stop_is_safe_to_call_when_never_started() -> None:
     sim, _ = make_simulator()
     await sim.stop()

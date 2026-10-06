@@ -4,9 +4,13 @@ from app.market_data.base import MarketDataProvider
 from app.market_data.types import PriceTick
 
 
-def test_cannot_instantiate_abstract_provider():
+async def _noop_on_tick(tick: PriceTick) -> None:
+    pass
+
+
+def test_cannot_instantiate_abstract_provider() -> None:
     with pytest.raises(TypeError):
-        MarketDataProvider(on_tick=lambda tick: None)
+        MarketDataProvider(on_tick=_noop_on_tick)  # type: ignore[abstract]
 
 
 class DummyProvider(MarketDataProvider):
@@ -26,7 +30,7 @@ class DummyProvider(MarketDataProvider):
         return None
 
 
-async def test_emit_invokes_on_tick_callback():
+async def test_emit_invokes_on_tick_callback() -> None:
     received = []
 
     async def on_tick(tick: PriceTick) -> None:
@@ -39,8 +43,8 @@ async def test_emit_invokes_on_tick_callback():
     assert received == [tick]
 
 
-def test_tickers_property_reflects_subclass_state():
-    provider = DummyProvider(lambda tick: None)
+def test_tickers_property_reflects_subclass_state() -> None:
+    provider = DummyProvider(_noop_on_tick)
     provider.add_ticker("AAPL")
     provider.add_ticker("msft")
 

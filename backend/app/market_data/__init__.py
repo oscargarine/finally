@@ -1,5 +1,5 @@
 from .base import MarketDataProvider
-from .cache import PriceCache, CachedPrice, price_cache
+from .cache import CachedPrice, PriceCache, price_cache
 from .factory import build_market_data_provider
 from .massive_client import MassiveMarketDataProvider
 from .simulator import MarketSimulator

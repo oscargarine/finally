@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import math
 import random
 
@@ -30,12 +31,17 @@ class MarketSimulator(MarketDataProvider):
         self._rng = random.Random(seed)
         self._prices: dict[str, float] = {t: cfg.seed_price for t, cfg in DEFAULT_TICKERS.items()}
         self._drift: dict[str, float] = {t: cfg.drift for t, cfg in DEFAULT_TICKERS.items()}
-        self._volatility: dict[str, float] = {t: cfg.volatility for t, cfg in DEFAULT_TICKERS.items()}
+        self._volatility: dict[str, float] = {
+            t: cfg.volatility for t, cfg in DEFAULT_TICKERS.items()
+        }
         self._sector: dict[str, str] = {t: cfg.sector for t, cfg in DEFAULT_TICKERS.items()}
         # capturado una vez por ticker y fijo durante toda la vida del proceso (§6 "session_open")
         self._session_open: dict[str, float] = dict(self._prices)
         self._tickers = set(DEFAULT_TICKERS.keys())
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
+        # referencias fuertes a los ticks inmediatos: el event loop solo guarda
+        # referencias débiles, y una tarea sin referencia puede ser recolectada a medias
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._running = False
 
     def add_ticker(self, ticker: str) -> None:
@@ -82,7 +88,9 @@ class MarketSimulator(MarketDataProvider):
             asyncio.get_running_loop()
         except RuntimeError:
             return
-        asyncio.create_task(self._emit(tick))
+        task = asyncio.create_task(self._emit(tick))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def _lognormal_seed_price(self) -> float:
         low, high = GENERIC_SEED_PRICE_RANGE
@@ -97,10 +105,8 @@ class MarketSimulator(MarketDataProvider):
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
 
     async def _run_loop(self) -> None:
@@ -138,7 +144,9 @@ class MarketSimulator(MarketDataProvider):
             new_price = max(new_price, 0.01)
             self._prices[ticker] = new_price
 
-            tick = PriceTick.create(ticker, new_price, prev, session_open=self._session_open[ticker])
+            tick = PriceTick.create(
+                ticker, new_price, prev, session_open=self._session_open[ticker]
+            )
             ticks.append(tick)
             await self._emit(tick)
 

@@ -65,7 +65,13 @@ class Dashboard:
             seed = self._seed.get(ticker, tick.price)
             pct = (tick.price - seed) / seed * 100 if seed else 0.0
             color = GREEN if pct >= 0 else RED
-            arrow = "▲" if tick.direction is Direction.UP else "▼" if tick.direction is Direction.DOWN else "="
+            arrow = (
+                "▲"
+                if tick.direction is Direction.UP
+                else "▼"
+                if tick.direction is Direction.DOWN
+                else "="
+            )
             rows.append(
                 f"  {BOLD}{ticker:<6}{RESET} "
                 f"${tick.price:>9,.2f}  "
@@ -76,7 +82,7 @@ class Dashboard:
         header = (
             f"{BOLD}{YELLOW}  FinAlly — Simulador de Mercado (GBM){RESET}\n"
             f"  {DIM}{elapsed:5.1f}s · {self._ticks} ticks emitidos · "
-            f"intervalo {TICK_INTERVAL_SECONDS*1000:.0f}ms{RESET}\n"
+            f"intervalo {TICK_INTERVAL_SECONDS * 1000:.0f}ms{RESET}\n"
             f"  {DIM}{'TICKER':<6} {'PRECIO':>10}  {'CAMBIO vs. SEMILLA':<13}  SPARKLINE{RESET}"
         )
         out = header + "\n" + "\n".join(rows)
@@ -112,10 +118,16 @@ async def run(tickers: list[str], seconds: float, seed: int | None) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Demo en terminal del simulador de mercado FinAlly.")
+    parser = argparse.ArgumentParser(
+        description="Demo en terminal del simulador de mercado FinAlly."
+    )
     parser.add_argument("--seconds", type=float, default=30.0, help="Duración de la demo (s).")
-    parser.add_argument("--tickers", type=str, default="", help="Lista separada por comas; vacío = por defecto.")
-    parser.add_argument("--seed", type=int, default=None, help="Semilla RNG para resultados reproducibles.")
+    parser.add_argument(
+        "--tickers", type=str, default="", help="Lista separada por comas; vacío = por defecto."
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Semilla RNG para resultados reproducibles."
+    )
     args = parser.parse_args()
 
     tickers = (

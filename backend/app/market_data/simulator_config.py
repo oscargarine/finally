@@ -4,9 +4,9 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class TickerConfig:
     seed_price: float
-    drift: float       # mu anualizado, p.ej. 0.08 = 8%/año
+    drift: float  # mu anualizado, p.ej. 0.08 = 8%/año
     volatility: float  # sigma anualizado, p.ej. 0.35 = 35%/año
-    sector: str         # para correlación entre sectores
+    sector: str  # para correlación entre sectores
 
 
 DEFAULT_TICKERS: dict[str, TickerConfig] = {

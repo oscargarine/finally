@@ -54,7 +54,16 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
 # Datos semilla por defecto (planning/PLAN.md §7 "Datos Semilla Predeterminados").
 DEFAULT_WATCHLIST_TICKERS = [
-    "AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "JPM", "V", "NFLX",
+    "AAPL",
+    "GOOGL",
+    "MSFT",
+    "AMZN",
+    "TSLA",
+    "NVDA",
+    "META",
+    "JPM",
+    "V",
+    "NFLX",
 ]
 DEFAULT_CASH_BALANCE = 10000.0
 DEFAULT_USER_ID = "default"

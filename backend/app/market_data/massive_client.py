@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import logging
+from typing import Any
 
 import httpx
 
@@ -38,14 +40,18 @@ class MassiveMarketDataProvider(MarketDataProvider):
         super().__init__(on_tick)
         self._poll_interval_seconds = poll_interval_seconds
         self._prev_prices: dict[str, float] = {}
-        # capturado una vez por ticker (prevDay.c) y fijo mientras dure el proceso (§6 "session_open")
+        # capturado una vez por ticker (prevDay.c) y fijo mientras dure el proceso
+        # (§6 "session_open")
         self._session_open: dict[str, float] = {}
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=10.0,
         )
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
+        # referencias fuertes a los sondeos dedicados: el event loop solo guarda
+        # referencias débiles, y una tarea sin referencia puede ser recolectada a medias
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._running = False
 
     def add_ticker(self, ticker: str) -> None:
@@ -56,7 +62,9 @@ class MassiveMarketDataProvider(MarketDataProvider):
             # sondeo dedicado inmediato: evita que ensure_ticker() tenga que esperar
             # hasta el siguiente ciclo periódico completo (hasta MASSIVE_POLL_INTERVAL_SECONDS)
             # para obtener el primer precio (ver planning/PLAN.md §6)
-            asyncio.create_task(self._poll_new_ticker_immediately(ticker))
+            task = asyncio.create_task(self._poll_new_ticker_immediately(ticker))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     def remove_ticker(self, ticker: str) -> None:
         self._tickers.discard(ticker.upper())
@@ -78,10 +86,8 @@ class MassiveMarketDataProvider(MarketDataProvider):
         self._running = False
         if self._task:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
             self._task = None
         await self._client.aclose()
 
@@ -122,7 +128,7 @@ class MassiveMarketDataProvider(MarketDataProvider):
         return ticks
 
     @staticmethod
-    def _parse_response(payload: dict) -> list[tuple[str, float, float | None]]:
+    def _parse_response(payload: dict[str, Any]) -> list[tuple[str, float, float | None]]:
         """Adapta la respuesta de snapshot de Massive a (ticker, price, session_open).
 
         El precio prioriza el último trade, y recurre al cierre del día / cierre

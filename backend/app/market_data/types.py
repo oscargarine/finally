@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any
 
 
 class Direction(str, Enum):
@@ -44,7 +45,7 @@ class PriceTick:
             session_open=round(session_open if session_open is not None else price, 4),
         )
 
-    def to_sse_dict(self) -> dict:
+    def to_sse_dict(self) -> dict[str, Any]:
         return {
             "ticker": self.ticker,
             "price": self.price,

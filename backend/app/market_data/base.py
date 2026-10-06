@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from .types import PriceTick
 
