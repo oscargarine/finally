@@ -36,3 +36,12 @@ Operator tooling under 01-TOOLS/.
 | Article | Summary | Updated | Score |
 |---------|---------|---------|-------|
 | [Operational tools catalog](operations/tools-catalog.md) | 01-TOOLS state; OpenRouter/Massive pending | 2026-10-06 | 0.0 |
+
+## sdd
+
+SDD constitution and decisions log.
+
+| Article | Summary | Updated | Score |
+|---------|---------|---------|-------|
+| [Constitution](sdd/constitution.md) | v1.0.0 — 17 non-negotiable principles + Definition of Done | 2026-10-06 | 0.0 |
+| [Decisions](sdd/decisions.md) | Append-only SDD decision log | 2026-10-06 | 0.0 |
