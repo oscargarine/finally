@@ -1,3 +1,9 @@
+# CLAUDE
+
+> Source: `CLAUDE.md` (workspace root)
+> Collected: 2026-10-06
+> Published: Unknown
+
 # Proyecto FinAlly - El Aliado Financiero
 
 Toda la documentación del proyecto se encuentra en el directorio `planning`.
